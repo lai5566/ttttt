@@ -167,6 +167,14 @@ class AdaptiveAugmentation:
     def update(self, d_real_scores: torch.Tensor):
         """根據 D 的 real score 更新增強機率。"""
         rt = torch.sign(d_real_scores).mean().item()
+        self.update_rt(rt)
+
+    def update_rt(self, rt: float):
+        """直接以（可能已跨 rank 平均的）r_t 值更新增強機率 p。
+
+        多卡 DDP 時，呼叫端應先把各 rank 的 r_t all-reduce 平均，再傳入此函式，
+        確保所有 rank 的 p 完全一致（augmentation 強度同步）。
+        """
         if rt > self.target_rt:
             self.p = min(self.p + self.adjust_speed, self.max_p)
         else:

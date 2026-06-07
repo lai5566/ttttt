@@ -9,3 +9,15 @@ __pycache__/
 
 # Logs / temp
 *.tmp
+
+# ── 訓練/生成/評估的執行期產出（用 R2 帶回，不進 git）──
+# 大檔不該進 GitHub（單檔 100MB 上限、repo 不放數十 GB）
+methods/*/generated_*/
+methods/01_mla_gan_ours/output_*/
+methods/02_stylegan3/results_*/
+eval/results/
+logs/
+
+# 打包檔（上傳 R2 用）
+results_*.tar.gz
+generated_*.tar

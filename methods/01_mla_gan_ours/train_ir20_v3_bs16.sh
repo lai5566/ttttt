@@ -7,12 +7,13 @@
 # └────────────────────────────────────────────────────────────────────┘
 set -euo pipefail
 cd "$(dirname "$0")/code"
+NPROC=${NPROC:-1}; if [ "$NPROC" -gt 1 ]; then LAUNCHER="torchrun --standalone --nproc_per_node=$NPROC"; else LAUNCHER="python"; fi
 
 EPOCHS=${EPOCHS:-400}
 SEED=${SEED:-7}
 OUTDIR=${OUTDIR:-../output_ir20_v3_bs16/run_seed${SEED}}
 
-python train_ir20_v3.py \
+$LAUNCHER train_ir20_v3.py \
   --epochs "$EPOCHS" --batch-size 16 --seed "$SEED" \
   --output-dir "$OUTDIR" "$@"
 echo "[DONE] IR=20 原版/非kfold/bs16 -> $OUTDIR/best_model.pth"
