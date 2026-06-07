@@ -24,3 +24,6 @@ generated_*.tar
 
 # R2 憑證（含祕密 token，絕不入庫；範本見 r2_env.sh.example）
 r2_env.sh
+
+# 增量上傳狀態檔
+.r2_upload_state.json

@@ -49,7 +49,9 @@ GPUS=${GPUS:-}
 PER_GPU_1=${PER_GPU_1:-3}
 PER_GPU_2=${PER_GPU_2:-2}
 METHODS=${METHODS:-"01 02"}
-PACK=${PACK:-1}
+INCREMENTAL_UPLOAD=${INCREMENTAL_UPLOAD:-1}   # 1=邊跑邊上傳（一有結果就傳）/ 0=不增量
+# 增量上傳開著時，預設不再做結尾的大打包（避免重複上傳）；要結尾整包就 PACK=1
+if [ "$INCREMENTAL_UPLOAD" = 1 ]; then PACK=${PACK:-0}; else PACK=${PACK:-1}; fi
 PACK_DIR=${PACK_DIR:-$ROOT}
 
 # ---- 前置檢查 ----
@@ -75,9 +77,26 @@ if [ "$MONITOR" = 1 ] && [ -f "$ROOT/0_gpu_notify_monitor.py" ] && command -v py
   MON_PID=$!
   say "[monitor] GPU 通知監控已啟動（PID ${MON_PID}，log: logs/gpu_monitor.log）"
 fi
-# 不論正常結束或被中斷，都嘗試收掉監控
-stop_monitor(){ [ -n "$MON_PID" ] && kill "$MON_PID" 2>/dev/null && say "[monitor] 已停止 GPU 監控（PID ${MON_PID}）"; MON_PID=""; }
-trap stop_monitor EXIT INT TERM
+# ---- 啟動增量上傳監看（背景；一有完成且穩定的結果就立刻傳 R2）----
+WATCH_PID=""
+if [ "$INCREMENTAL_UPLOAD" = 1 ] && [ -f "$ROOT/watch_and_upload.py" ] && command -v python3 >/dev/null 2>&1; then
+  if [ -z "${R2_ACCESS_KEY_ID:-}" ]; then
+    say "[upload] 未設定 R2 憑證 → 不啟動增量上傳（先設好 r2_env.sh）"
+  else
+    python3 -c 'import boto3' 2>/dev/null || { pip install -q boto3 2>>"$LOG" || pip3 install -q boto3 2>>"$LOG" || true; }
+    python3 "$ROOT/watch_and_upload.py" >> "$ROOT/logs/watch_upload.log" 2>&1 &
+    WATCH_PID=$!
+    say "[upload] 增量上傳監看已啟動（PID ${WATCH_PID}，log: logs/watch_upload.log）"
+  fi
+fi
+
+# 不論正常結束或被中斷，都嘗試收掉背景程序
+stop_bg(){
+  [ -n "$MON_PID" ]   && kill "$MON_PID"   2>/dev/null && say "[monitor] 已停止 GPU 監控（PID ${MON_PID}）"
+  [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null && say "[upload] 已停止增量上傳監看（PID ${WATCH_PID}）"
+  MON_PID=""; WATCH_PID=""
+}
+trap stop_bg EXIT INT TERM
 
 run_01(){
   local sub="$ROOT/methods/01_mla_gan_ours/master_run_all.sh"
@@ -106,6 +125,13 @@ done
 
 ELAPSED=$(( $(date +%s) - START ))
 say "★ 訓練/生成/評估全部完成，耗時 $((ELAPSED/3600))h$(((ELAPSED%3600)/60))m$((ELAPSED%60))s"
+
+# 增量上傳：最後補掃一次，把最後一輪剛完成、還沒被監看器掃到的結果也傳上去
+if [ "$INCREMENTAL_UPLOAD" = 1 ] && [ -f "$ROOT/watch_and_upload.py" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ]; then
+  say "[upload] 最後補掃一次（WATCH_ONCE，穩定門檻放寬到 30s）..."
+  WATCH_ONCE=1 WATCH_STABLE=30 python3 "$ROOT/watch_and_upload.py" >> "$ROOT/logs/watch_upload.log" 2>&1 || true
+  say "[upload] 補掃完成（明細見 logs/watch_upload.log）"
+fi
 
 # ============================================================================
 # 打包 + 上傳 R2（伺服器對公網快；你在台灣從 R2 公開連結下載，繞開慢的直連）
