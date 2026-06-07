@@ -21,3 +21,6 @@ logs/
 # 打包檔（上傳 R2 用）
 results_*.tar.gz
 generated_*.tar
+
+# R2 憑證（含祕密 token，絕不入庫；範本見 r2_env.sh.example）
+r2_env.sh

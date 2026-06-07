@@ -1,0 +1,15 @@
+# R2 上傳憑證範本 —— 在伺服器上複製成 r2_env.sh 並填入 token：
+#     cp r2_env.sh.example r2_env.sh
+#     # 編輯 r2_env.sh，把 R2_TOKEN 換成真正的 cfat_ token
+#     # run_all_and_pack.sh 會自動 source r2_env.sh
+#
+# ⚠️ r2_env.sh 已被 .gitignore 排除，絕不要 commit（repo 是 public）。
+# ⚠️ R2_TOKEN 是唯一的祕密；其餘是識別碼（非祕密，類似 AWS Access Key ID）。
+
+export R2_ACCOUNT_ID="ee304ea2523c14108ddbdb87e995f9b6"
+export R2_ACCESS_KEY_ID="9e7de075503fa178cb1c68292e40fa93"   # = Cloudflare API token 的 ID
+export R2_BUCKET="zxx"
+export R2_PUBLIC_BASE="https://pub-f3129530dfcd42b9ad0c77f15dba3245.r2.dev"
+
+# ↓↓↓ 只有這行是祕密，填你的 cfat_ token（程式會自動算 secret = sha256(token)）↓↓↓
+export R2_TOKEN="cfat_PUT_YOUR_TOKEN_HERE"

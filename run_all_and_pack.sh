@@ -38,6 +38,13 @@ LOG="$ROOT/logs/run_all.log"
 TS(){ date '+%Y-%m-%d %H:%M:%S'; }
 say(){ echo "[$(TS)] $*" | tee -a "$LOG"; }
 
+# 自動載入 R2 憑證（r2_env.sh 為 gitignored，不入庫；見 r2_env.sh.example）
+if [ -f "$ROOT/r2_env.sh" ]; then
+  # shellcheck disable=SC1090
+  source "$ROOT/r2_env.sh"
+  say "[R2] 已載入 r2_env.sh 憑證"
+fi
+
 GPUS=${GPUS:-}
 PER_GPU_1=${PER_GPU_1:-3}
 PER_GPU_2=${PER_GPU_2:-2}
