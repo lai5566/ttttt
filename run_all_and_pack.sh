@@ -66,6 +66,19 @@ fi
 START=$(date +%s)
 say "★ 開始 run_all_and_pack | METHODS=$METHODS PER_GPU_1=$PER_GPU_1 PER_GPU_2=$PER_GPU_2"
 
+# ---- 啟動 GPU 狀態通知監控（背景；發 hi/run/stop 到 Discord）----
+MONITOR=${MONITOR:-1}     # 1=啟動監控（預設）/ 0=不啟動
+MON_PID=""
+if [ "$MONITOR" = 1 ] && [ -f "$ROOT/0_gpu_notify_monitor.py" ] && command -v python3 >/dev/null 2>&1; then
+  python3 -c 'import requests' 2>/dev/null || { say "[monitor] 安裝 requests ..."; pip install -q requests 2>>"$LOG" || pip3 install -q requests 2>>"$LOG" || say "[monitor][WARN] requests 安裝失敗，監控可能無法發通知"; }
+  python3 "$ROOT/0_gpu_notify_monitor.py" >> "$ROOT/logs/gpu_monitor.log" 2>&1 &
+  MON_PID=$!
+  say "[monitor] GPU 通知監控已啟動（PID ${MON_PID}，log: logs/gpu_monitor.log）"
+fi
+# 不論正常結束或被中斷，都嘗試收掉監控
+stop_monitor(){ [ -n "$MON_PID" ] && kill "$MON_PID" 2>/dev/null && say "[monitor] 已停止 GPU 監控（PID ${MON_PID}）"; MON_PID=""; }
+trap stop_monitor EXIT INT TERM
+
 run_01(){
   local sub="$ROOT/methods/01_mla_gan_ours/master_run_all.sh"
   [ -f "$sub" ] || { say "[ERR] 找不到 ${sub}，略過方法01"; return; }
