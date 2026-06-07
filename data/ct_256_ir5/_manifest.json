@@ -1,0 +1,31 @@
+{
+  "ir": 5,
+  "seed": 42,
+  "mask_aug_x": 0,
+  "mask_threshold": 5,
+  "resolution": 256,
+  "source": "data/0_dataset/Brain_Stroke_CT_Dataset",
+  "reuse_split_from": "data/ct_256",
+  "class_map": {
+    "Normal": 0,
+    "Ischemia": 1,
+    "Bleeding": 2
+  },
+  "counts": {
+    "train": {
+      "class0": 3541,
+      "class1": 708,
+      "class2": 708
+    },
+    "val": {
+      "class0": 442,
+      "class1": 113,
+      "class2": 109
+    },
+    "test": {
+      "class0": 444,
+      "class1": 113,
+      "class2": 110
+    }
+  }
+}

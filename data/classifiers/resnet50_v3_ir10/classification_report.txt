@@ -1,0 +1,16 @@
+              precision    recall  f1-score   support
+
+      class0     0.8918    0.9842    0.9358       444
+      class1     0.9136    0.6549    0.7629       113
+      class2     0.9167    0.8000    0.8544       110
+
+    accuracy                         0.8981       667
+   macro avg     0.9074    0.8130    0.8510       667
+weighted avg     0.8996    0.8981    0.8930       667
+
+Test acc: 0.8981, macro_F1: 0.8510
+
+Confusion matrix:
+[[437   4   3]
+ [ 34  74   5]
+ [ 19   3  88]]
