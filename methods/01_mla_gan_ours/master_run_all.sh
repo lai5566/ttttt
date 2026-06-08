@@ -57,10 +57,15 @@ run_cell() {
     {
       if [ -n "$train" ]; then
         echo "==== [$(TS)] $tag TRAIN ===="
-        if [ -f "$ckpt" ]; then echo "[skip train] $ckpt 已存在"; else CUDA_VISIBLE_DEVICES=$gpu bash "$train"; fi
+        # 以「.train_done 完成標記」判斷是否跳過（而非 best_model.pth）：
+        # 訓練中也會有 best_model.pth，用它當守衛會誤跳過「沒跑完」的 cell。
+        # 沒標記 → 跑（train.py 會自動從 latest.pth 續訓）；跑完(exit 0)才寫標記。
+        tdone="$(dirname "$ckpt")/.train_done"
+        if [ -f "$tdone" ]; then echo "[skip train] 已完成 ($tdone)"; else CUDA_VISIBLE_DEVICES=$gpu bash "$train" && touch "$tdone"; fi
       fi
       echo "==== [$(TS)] $tag GENERATE ===="
-      if [ -d "$gendir" ]; then echo "[skip gen] $gendir 已存在"; else CUDA_VISIBLE_DEVICES=$gpu bash "$gen"; fi
+      # 同理用 .gen_done 標記，避免半截生成被當成已完成而跳過。
+      if [ -f "$gendir/.gen_done" ]; then echo "[skip gen] 已完成 ($gendir/.gen_done)"; else CUDA_VISIBLE_DEVICES=$gpu bash "$gen" && touch "$gendir/.gen_done"; fi
       echo "==== [$(TS)] $tag EVAL ===="
       CUDA_VISIBLE_DEVICES=$gpu bash run_eval_generic.sh "$gendir" "$name" "$ir" "$bs"
     } > "$M/logs/cell_${tag}.log" 2>&1

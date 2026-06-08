@@ -15,10 +15,12 @@ Phase 1: 訓練 MLA-GAN（200 epochs）
 import argparse
 import json
 import os
+import random
 import time
 from contextlib import nullcontext
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
@@ -182,6 +184,20 @@ def train(config: MLAGANConfig):
     best_score_gap = -999
     log_history = []
 
+    # 自動續訓：未明確指定 --resume 時，優先用 latest.pth，否則用最新的
+    # checkpoint_epoch*.pth（相容舊 run）。配合 stateless：機器被回收 → 換新機器
+    # bootstrap 拉回 → 自動無痛續跑。
+    if not config.resume_checkpoint:
+        latest_path = Path(config.output_dir) / 'latest.pth'
+        if latest_path.exists():
+            config.resume_checkpoint = str(latest_path)
+        else:
+            eps = sorted(Path(config.output_dir).glob('checkpoint_epoch*.pth'))
+            if eps:
+                config.resume_checkpoint = str(eps[-1])
+        if config.resume_checkpoint and is_main:
+            print(f"[resume] 自動續訓自 {config.resume_checkpoint}")
+
     if config.resume_checkpoint:
         if is_main:
             print(f"從 checkpoint 接續訓練: {config.resume_checkpoint}")
@@ -198,6 +214,20 @@ def train(config: MLAGANConfig):
             opt_D.load_state_dict(ckpt['opt_D_state_dict'])
         if 'ada_p' in ckpt:
             ada.p = ckpt['ada_p']
+        # 還原 RNG 狀態 → 續訓後資料順序/噪聲分佈與未中斷時一致，loss 不會突然飆高
+        rng = ckpt.get('rng_state')
+        if rng is not None:
+            try:
+                torch.set_rng_state(rng['torch'])
+                if rng.get('cuda') is not None and torch.cuda.is_available():
+                    torch.cuda.set_rng_state_all(rng['cuda'])
+                np.random.set_state(rng['numpy'])
+                random.setstate(rng['python'])
+                if is_main:
+                    print("  已還原 RNG 狀態（torch/cuda/numpy/python）")
+            except Exception as e:  # noqa
+                if is_main:
+                    print(f"  [warn] RNG 還原失敗（忽略，續訓仍可進行）：{e}")
         start_epoch = ckpt.get('epoch', 0)
         global_step = start_epoch * num_batches
         if is_main:
@@ -208,6 +238,45 @@ def train(config: MLAGANConfig):
                 with open(log_path) as f:
                     log_history = json.load(f)
                 print(f"  載入既有日誌 {len(log_history)} 條")
+
+    # ── 斷點存檔工具（含 RNG；原子寫入避免同步時抓到半截檔）──
+    def _rng_state():
+        return {
+            'torch': torch.get_rng_state(),
+            'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            'numpy': np.random.get_state(),
+            'python': random.getstate(),
+        }
+
+    def _save_ckpt(path, epoch_done, with_opt=True):
+        d = {
+            'epoch': epoch_done,
+            'G_state_dict': unwrap_model(G).state_dict(),
+            'D_state_dict': unwrap_model(D).state_dict(),
+            'ada_p': ada.p,
+            'bd_stats': bd_stats,
+            'config': vars(config),
+            'rng_state': _rng_state(),
+        }
+        if with_opt:
+            d['opt_G_state_dict'] = opt_G.state_dict()
+            d['opt_D_state_dict'] = opt_D.state_dict()
+        tmp = str(path) + '.tmp'
+        torch.save(d, tmp)
+        os.replace(tmp, path)
+
+    def _prune_epoch_ckpts(keep):
+        """只保留最新 keep 個 checkpoint_epoch*.pth，舊的刪除（省 R2 空間）。"""
+        files = sorted(Path(config.output_dir).glob('checkpoint_epoch*.pth'))
+        for old in files[:-keep] if keep > 0 else []:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+    ckpt_every_sec = int(os.environ.get('CKPT_EVERY_MIN', '20')) * 60
+    ckpt_keep = int(os.environ.get('CKPT_KEEP', '3'))
+    last_ckpt_time = time.time()
 
     for epoch in range(start_epoch, config.epochs):
         epoch_start = time.time()
@@ -357,43 +426,37 @@ def train(config: MLAGANConfig):
         # ─── Epoch 結束：儲存 checkpoint（只在主 rank，避免多卡競寫）───
         epoch_time = time.time() - epoch_start
 
-        # 存檔前先 unwrap，去掉 DDP(module.)/compile(_orig_mod.) 前綴，
-        # 確保 checkpoint 與單卡、與下游 generate 腳本完全相容。
+        # 一律經 _save_ckpt（內含 unwrap + RNG + 原子寫入），與單卡/下游 generate 相容。
         if is_main:
+            # (1) 里程碑 checkpoint（每 save_interval），只保留最新 ckpt_keep 個
             if (epoch + 1) % config.save_interval == 0 or epoch == config.epochs - 1:
                 ckpt_path = Path(config.output_dir) / f"checkpoint_epoch{epoch + 1:03d}.pth"
-                torch.save({
-                    'epoch': epoch + 1,
-                    'G_state_dict': unwrap_model(G).state_dict(),
-                    'D_state_dict': unwrap_model(D).state_dict(),
-                    'opt_G_state_dict': opt_G.state_dict(),
-                    'opt_D_state_dict': opt_D.state_dict(),
-                    'ada_p': ada.p,
-                    'bd_stats': bd_stats,
-                    'config': vars(config),
-                }, ckpt_path)
+                _save_ckpt(ckpt_path, epoch + 1)
+                _prune_epoch_ckpts(ckpt_keep)
                 print(f"  Checkpoint 已儲存: {ckpt_path}")
 
-            # 追蹤最佳模型（以 score gap 穩定性作為指標）
+            # (2) 續訓點 latest.pth：每 CKPT_EVERY_MIN 分鐘存一次（含 opt+RNG+epoch）
+            if time.time() - last_ckpt_time >= ckpt_every_sec:
+                _save_ckpt(Path(config.output_dir) / 'latest.pth', epoch + 1)
+                last_ckpt_time = time.time()
+                print(f"  latest.pth 已更新（epoch {epoch + 1}，續訓點）")
+
+            # (3) 追蹤最佳模型（以 score gap 穩定性作為指標）
             if len(log_history) > 0:
                 recent_gaps = [e['score_gap'] for e in log_history[-10:]]
                 avg_gap = sum(recent_gaps) / len(recent_gaps)
                 if 0 < avg_gap < best_score_gap * 3 or best_score_gap < 0:
                     best_score_gap = avg_gap
-                    best_path = Path(config.output_dir) / "best_model.pth"
-                    torch.save({
-                        'epoch': epoch + 1,
-                        'G_state_dict': unwrap_model(G).state_dict(),
-                        'D_state_dict': unwrap_model(D).state_dict(),
-                        'bd_stats': bd_stats,
-                        'config': vars(config),
-                    }, best_path)
+                    _save_ckpt(Path(config.output_dir) / "best_model.pth",
+                               epoch + 1, with_opt=False)
 
             print(f"  Epoch {epoch + 1}/{config.epochs} 完成 "
                   f"({epoch_time:.1f}s, ADA_p={ada.p:.2f})")
 
-    # ═══ 儲存訓練日誌（只在主 rank）═══
+    # ═══ 收尾：存最終 latest.pth（epoch=config.epochs）+ 訓練日誌（只在主 rank）═══
     if is_main:
+        # 標記訓練已跑完；若之後又被叫起來，resume 會看到 epoch==epochs → 迴圈直接結束
+        _save_ckpt(Path(config.output_dir) / 'latest.pth', config.epochs)
         log_path = Path(config.output_dir) / 'training_log.json'
         with open(log_path, 'w') as f:
             json.dump(log_history, f, indent=2)
