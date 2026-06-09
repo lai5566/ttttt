@@ -22,11 +22,20 @@ echo "[bootstrap] rclone $(rclone version 2>/dev/null | head -1)"
 # shellcheck source=/dev/null
 source "$HERE/r2_rclone_env.sh" || exit 1
 
-# 3) 從 R2 拉回 state（copy 不刪本地；只補本地缺的/較舊的）
-echo "[bootstrap] 從 ${R2_REMOTE} 拉回先前進度到 ${ROOT} ..."
-rclone copy "$R2_REMOTE" "$ROOT" \
-  --transfers "${RCLONE_TRANSFERS:-8}" --checkers "${RCLONE_CHECKERS:-16}" \
-  --fast-list --stats-one-line --stats 30s
+# 3) 從 R2 拉回 state，分兩段（避免被幾萬張小圖拖死）：
+#    (A) checkpoint/結果/日誌：照常拉（量小、要最新）
+#    (B) 生成影像：--ignore-existing，本機已有的就跳過、不重查 → 同機重啟近乎瞬間
+CK="${RCLONE_CHECKERS:-64}"; TR="${RCLONE_TRANSFERS:-16}"
+COMMON=(--fast-list --checkers "$CK" --transfers "$TR" --stats-one-line --stats 30s)
+echo "[bootstrap] (A) 拉 checkpoint/結果/日誌 ← ${R2_REMOTE} ..."
+rclone copy "$R2_REMOTE" "$ROOT" "${COMMON[@]}" \
+  --include "methods/01_mla_gan_ours/output_*/**" \
+  --include "methods/02_stylegan3/results_*/**" \
+  --include "eval/results/**" --include "logs/**"
+echo "[bootstrap] (B) 拉生成影像（跳過本機已有的）← ${R2_REMOTE} ..."
+rclone copy "$R2_REMOTE" "$ROOT" "${COMMON[@]}" --ignore-existing \
+  --include "methods/01_mla_gan_ours/generated_*/**" \
+  --include "methods/02_stylegan3/generated_*/**"
 
 echo "[bootstrap] 完成。已恢復的訓練輸出："
 ls -d "$ROOT"/methods/01_mla_gan_ours/output_* 2>/dev/null | sed 's/^/  /' \
