@@ -33,7 +33,22 @@ if [ "$PER_GPU" = "auto" ]; then
   echo "[$(TS)] PER_GPU=auto → ${FREE}MB/${SLOT_MB}MB = $PER_GPU /卡" | tee -a "$LOG"
 fi
 SLOTS=$((NGPU*PER_GPU))
+
+# ── 防 CPU 執行緒超賣（根本解）──
+# 每 process 預設會開滿核心數的 OMP/MKL 執行緒；一卡多 cell 並行時 N 個 process
+# 各開滿 → 嚴重超賣，閒置執行緒還 busy-wait 空轉燒 CPU → GPU 餵不到、0% util
+# （gateA 的 generate_gate.py 1 張/秒、eval 被資料餓死的真正元兇）。
+# 解法：依並行槽數把核心數平均分給每 process，並把閒置執行緒改成睡覺(PASSIVE)。
+# 純效能、不改任何結果數字。可用 OMP_NUM_THREADS 環境變數覆寫。
+if [ -z "${OMP_NUM_THREADS:-}" ]; then
+  NCORES=$(nproc 2>/dev/null || echo 8)
+  OMP=$(( NCORES / SLOTS )); [ "$OMP" -lt 1 ] && OMP=1; [ "$OMP" -gt 8 ] && OMP=8
+  export OMP_NUM_THREADS=$OMP MKL_NUM_THREADS=$OMP OPENBLAS_NUM_THREADS=$OMP NUMEXPR_NUM_THREADS=$OMP
+fi
+export OMP_WAIT_POLICY="${OMP_WAIT_POLICY:-PASSIVE}"
+
 echo "[$(TS)] GPU x$NGPU=${GPUARR[*]} PER_GPU=$PER_GPU SLOTS=$SLOTS | METHODS=$METHODS IRS=$IRS BSS=$BSS" | tee -a "$LOG"
+echo "[$(TS)] [threads] OMP_NUM_THREADS=$OMP_NUM_THREADS WAIT_POLICY=${OMP_WAIT_POLICY}（防 CPU 超賣空轉）" | tee -a "$LOG"
 
 # ---- semaphore ----
 FIFO=$(mktemp -u); mkfifo "$FIFO"; exec 9<>"$FIFO"; rm -f "$FIFO"

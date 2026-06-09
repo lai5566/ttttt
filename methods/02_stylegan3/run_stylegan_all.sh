@@ -17,7 +17,15 @@ if [ -n "${GPUS:-}" ]; then IFS=',' read -ra GA <<< "$GPUS"; else mapfile -t GA 
 NGPU=${#GA[@]}; [ "$NGPU" -eq 0 ] && { echo "[FATAL] 無 GPU"; exit 1; }
 PER_GPU=${PER_GPU:-1}
 if [ "$PER_GPU" = auto ]; then FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null|sort -n|head -1); PER_GPU=$(( ${FREE:-10000}/10000 )); [ "$PER_GPU" -lt 1 ]&&PER_GPU=1; fi
-echo "[$(TS)] GPU x$NGPU=${GA[*]} PER_GPU=$PER_GPU | IRS=$IRS BSS=$BSS" | tee -a "$LOG"
+SLOTS=$((NGPU*PER_GPU))
+# ── 防 CPU 執行緒超賣（純效能、不改結果）：依並行槽數分配每 process 執行緒 + 關空轉 ──
+if [ -z "${OMP_NUM_THREADS:-}" ]; then
+  NCORES=$(nproc 2>/dev/null || echo 8)
+  OMP=$(( NCORES / SLOTS )); [ "$OMP" -lt 1 ] && OMP=1; [ "$OMP" -gt 8 ] && OMP=8
+  export OMP_NUM_THREADS=$OMP MKL_NUM_THREADS=$OMP OPENBLAS_NUM_THREADS=$OMP NUMEXPR_NUM_THREADS=$OMP
+fi
+export OMP_WAIT_POLICY="${OMP_WAIT_POLICY:-PASSIVE}"
+echo "[$(TS)] GPU x$NGPU=${GA[*]} PER_GPU=$PER_GPU SLOTS=$SLOTS | IRS=$IRS BSS=$BSS | OMP=$OMP_NUM_THREADS WAIT=$OMP_WAIT_POLICY" | tee -a "$LOG"
 FIFO=$(mktemp -u); mkfifo "$FIFO"; exec 9<>"$FIFO"; rm -f "$FIFO"
 for g in "${GA[@]}"; do for ((k=0;k<PER_GPU;k++)); do echo "$g" >&9; done; done
 
