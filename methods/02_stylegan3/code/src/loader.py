@@ -19,7 +19,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import torch
 import torch.distributed as dist
-import wandb
+try:
+    import wandb
+except ImportError:  # wandb 為選用：缺它就用 no-op 替身，所有 wandb.xxx() 自動變空操作
+    class _WandbStub:
+        def __getattr__(self, _name):
+            return lambda *a, **k: None
+    wandb = _WandbStub()
 
 from data_util import Dataset_
 from utils.style_ops import grid_sample_gradfix

@@ -42,7 +42,13 @@ import utils.sefa as sefa
 import utils.ops as ops
 import utils.resize as resize
 import utils.apa_aug as apa_aug
-import wandb
+try:
+    import wandb
+except ImportError:  # wandb 為選用：缺它就用 no-op 替身，所有 wandb.xxx() 自動變空操作
+    class _WandbStub:
+        def __getattr__(self, _name):
+            return lambda *a, **k: None
+    wandb = _WandbStub()
 
 SAVE_FORMAT = "step={step:0>3}-Inception_mean={Inception_mean:<.4}-Inception_std={Inception_std:<.4}-FID={FID:<.5}.pth"
 
