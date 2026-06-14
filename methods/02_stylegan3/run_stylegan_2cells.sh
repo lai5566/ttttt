@@ -21,6 +21,10 @@ TS(){ date '+%Y-%m-%d %H:%M:%S'; }
 LOG="$M/logs/two_cells.log"
 say(){ echo "[$(TS)] $*" | tee -a "$LOG"; }
 
+# 自動安裝依賴（冪等，已裝齊就秒過）
+ROOT="$(cd "$M/../.." && pwd)"
+[ -f "$ROOT/setup_env.sh" ] && bash "$ROOT/setup_env.sh"
+
 # 不限制 CUDA_VISIBLE_DEVICES → main.py 看得到所有 GPU → -DDP 會把它們都吃滿
 NGPU=$(python3 -c 'import torch;print(torch.cuda.device_count())' 2>/dev/null || echo 0)
 { [ -z "$NGPU" ] || [ "$NGPU" -lt 1 ]; } && NGPU=$(nvidia-smi -L 2>/dev/null | wc -l)
